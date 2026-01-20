@@ -1,4 +1,6 @@
 # LiveKit Intelligent Interruption Handling (Backchannel Filter)
+**Submitted by:** Kush Tokas | **Roll No:** 2023296 | **College:** IIITD
+
 
 This repository implements a **context-aware interruption handling layer** for a LiveKit voice agent.
 
