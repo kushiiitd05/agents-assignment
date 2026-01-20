@@ -233,7 +233,7 @@ python interrupt_tests.py
 
 ---
 
-## 🎬 Live Demo Validation (Real-Time Behavior)
+## 🎬 Live Demo Validation(demo_video.mov) (Real-Time Behavior)
 
 This was also validated in a real voice agent session (not only unit tests).
 
