@@ -197,26 +197,26 @@ class InterruptionHandler:
         return normalized in self._backchannel_phrases
     
     def _contains_command(self, words: List[str]) -> Tuple[bool, Optional[str]]:
-    # single word match
-        for w in words:
-            if w in self._command_set:
-                return True, w
-
-        # phrase match using n-grams (NO substring bugs)
-        text_words = words
-
-        # build 2-gram and 3-gram phrases
-        bigrams = {" ".join(text_words[i:i+2]) for i in range(len(text_words)-1)}
-        trigrams = {" ".join(text_words[i:i+3]) for i in range(len(text_words)-2)}
-
-        for cmd in self.settings.explicit_commands:
-            c = self._normalize(cmd)
-            if " " in c:
-                if c in bigrams or c in trigrams:
+        """Check if word list contains any explicit command.
+        
+        Args:
+            words: List of normalized word tokens
+            
+        Returns:
+            Tuple of (has_command, first_command_found)
+        """
+        for word in words:
+            if word in self._command_set:
+                return True, word
+            
+            # Check multi-word commands
+            # Reconstruct for phrase matching
+            text = " ".join(words)
+            for cmd in self.settings.explicit_commands:
+                if self._normalize(cmd) in text:
                     return True, cmd
-
+        
         return False, None
-
     
     def _is_pure_backchannel(self, words: List[str], original_text: str) -> bool:
         """Determine if input consists only of backchannel cues.
@@ -273,10 +273,14 @@ class InterruptionHandler:
         # Handler disabled - pass through all interrupts
         if not self.settings.enabled:
             return False
+        # debug step
+        # print(f"if not self.settings.enabled: {self.settings.enabled}")
         
         # Empty input - don't ignore
         if not text or not text.strip():
             return False
+        # debug step
+        # print(f"if not text or not text.strip(): {text}") 
         
         # Tokenize input
         words = self._tokenize(text)
@@ -284,6 +288,8 @@ class InterruptionHandler:
         # No detectable words - don't ignore
         if not words:
             return False
+        # debug step
+        # print(f"if not words: {words}")
         
         # Check for explicit commands first (highest priority)
         has_command, command = self._contains_command(words)
@@ -291,6 +297,8 @@ class InterruptionHandler:
             if self.settings.debug:
                 print(f"Command detected: '{command}' → INTERRUPT")
             return False
+        # debug step
+        # print(f"if has_command: {has_command}, command: {command}")
         
         # Check if pure backchannel
         is_backchannel = self._is_pure_backchannel(words, text)
@@ -301,11 +309,14 @@ class InterruptionHandler:
             if self.settings.debug:
                 print(f"Backchannel while speaking: '{text}' → IGNORE")
             return True
+        # print(f"if is_backchannel and is_speaking: {is_backchannel}, {is_speaking}")
+        
         
         # All other cases → Don't ignore
         if self.settings.debug:
             reason = "backchannel while silent" if is_backchannel else "meaningful content"
             print(f"{reason}: '{text}' → RESPOND")
+        # print(f"All other cases → Don't ignore")
         
         return False
     

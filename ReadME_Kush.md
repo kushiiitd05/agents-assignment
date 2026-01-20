@@ -1,190 +1,283 @@
-# LiveKit Intelligent Interruption Handling (Backchannel Filter)
-**Submitted by:** Kush Tokas | **Roll No:** 2023296 | **College:** IIITD
 
 
-This repository implements a **context-aware interruption handling layer** for a LiveKit voice agent.
+# LiveKit Intelligent Interruption Handling (Backchannel-Aware)
 
-## Problem
+##  Author Details
 
-LiveKit’s default VAD (Voice Activity Detection) is very sensitive.
-When the agent is speaking and the user says short **backchannel acknowledgements** like:
+**Name:** Kush Tokas 
 
-* `yeah`, `ok`, `aha`, `hmm`, `uh-huh`, `right`
+**College:** IIIT D 
 
-…the agent incorrectly treats it as an **interruption** and stops speaking abruptly.
+**Roll Number:** 2023296 
 
-This creates a poor real-time conversational experience.
+**Assignment:** LiveKit Agents — Intelligent Interruption Handling
 
 ---
 
-## Goal
+##  Overview
 
-Implement a logic layer that distinguishes between:
+This submission implements **context-aware interruption handling** for LiveKit Voice Agents by distinguishing between:
 
-### ✅ Passive Acknowledgement (Backchannel)
+* **Passive backchannel acknowledgements**: `"yeah"`, `"ok"`, `"hmm"`, `"uh-huh"`
+* **Active interruption commands**: `"stop"`, `"wait"`, `"pause"`, `"cancel"`, `"hold on"`
 
-While the agent is speaking:
-
-* `"yeah"`, `"ok"`, `"hmm"`
-  ➡️ **Ignore** and continue speaking seamlessly (**no pause / no hiccup**)
-
-### ✅ Active Interruption
-
-While the agent is speaking:
-
-* `"stop"`, `"wait"`, `"no"`
-  ➡️ **Interrupt immediately** and listen to user
-
-### ✅ Normal Behavior When Agent is Silent
-
-When the agent is silent:
-
-* `"yeah"` is treated as valid input
-  ➡️ Agent responds normally
+The system prevents the agent from being interrupted by natural conversational backchannels **while the agent is speaking**, but still allows **immediate interruption** when the user uses command-like words.
 
 ---
 
-## What Was Implemented
+##  Problem Statement
 
-### 1) Configurable Ignore List (Backchannel Words)
+In the default LiveKit agent pipeline, **Voice Activity Detection (VAD)** is highly sensitive and treats *any* user speech during agent output as an interruption.
 
-A configurable list of **soft inputs** was added (example):
+This causes a common real-world failure:
+
+> When the agent is explaining something and the user says “yeah” or “hmm” (backchanneling), the agent stops mid-sentence.
+
+This breaks the conversational flow and makes the agent feel unstable and overly reactive.
+
+---
+
+##  What I Initially Did Wrong (Learning + Iteration)
+
+During early attempts, I tried to solve the interruption problem at the **wrong layer** of the system.
+
+### 1) Fixing too late in the pipeline
+
+At first, I attempted to filter interruptions at a higher “conversation” level (or after events were already committed).
+However, in real-time voice systems:
+
+* **VAD triggers immediately**
+* interruption logic may execute **before** transcription is finalized
+* sometimes the transcript reaches the LLM quickly and the response begins generation
+
+So even if I detected “yeah” later, the interruption had already happened or the LLM had already reacted.
+
+### 2) Relying only on session configuration knobs
+
+I explored parameters like:
+
+* minimum interruption words/duration
+* false interruption resume settings
+
+These help reduce noise interruptions, but they **cannot distinguish meaning**, i.e.:
+
+* “yeah” (acknowledgement)
+* “stop” (command)
+
+So configuration alone cannot satisfy the assignment requirement.
+
+---
+
+## Final Approach (What I Did Right)
+
+The correct fix is to implement interruption handling **at the right layer**:
+
+### ✔ Context-aware filtering between STT and interruption logic
+
+I implemented a **semantic filter** that uses:
+
+1. **Agent speaking state**
+2. **Normalized transcript tokens**
+3. **Command priority rules**
+
+So the same word behaves differently depending on context:
+
+* Agent speaking + “yeah” → ignored (no interruption)
+* Agent silent + “yeah” → valid input (processed normally)
+* Agent speaking + “stop” → interrupts immediately
+
+---
+
+##  Key Features
+
+### State-Based Behavior
+
+| Input          | Agent Speaking? | Result    | Why              |
+| -------------- | --------------- | --------- | ---------------- |
+| “yeah”         | Yes             | IGNORE    | backchannel      |
+| “yeah”         | No              | PROCESS   | valid response   |
+| “stop”         | Yes             | INTERRUPT | explicit command |
+| “yeah wait”    | Yes             | INTERRUPT | command wins     |
+| “hmm ok right” | Yes             | IGNORE    | pure backchannel |
+
+### Semantic Priority (Commands Always Win)
+
+If any explicit command word exists inside the transcript, interruption is allowed immediately even if backchannel words exist.
+
+Example:
+“yeah wait a second” → contains `"wait"` → **interrupt**
+
+###  Normalization + Tokenization
+
+The filter normalizes transcripts for reliability:
+
+* lowercasing
+* punctuation cleanup
+* token extraction using regex (supports hyphenated tokens)
+
+###  Edge Case Handling
+
+The system safely handles empty / meaningless inputs:
+
+* empty string
+* whitespace-only
+* punctuation-only
+
+These are treated as **non-actionable** and do not cause unstable behavior.
+
+---
+
+##  Architecture
+
+### High-Level Pipeline
+
+```
+User Speech (Audio)
+    ↓
+Voice Activity Detection (VAD)
+    ↓
+Speech-to-Text (STT)
+    ↓
+Interruption Filter (My Implementation)
+    ↓
+Decision: IGNORE or INTERRUPT
+    ↓
+Agent continues speaking OR stops immediately
+```
+
+### Why this layer matters
+
+This approach prevents backchannels from becoming interruptions **before they reach the interruption handler / LLM**, avoiding real-time race conditions.
+
+---
+
+##  Files Changed / Added
+
+### 1) `examples/voice_agents/basic_agent.py` (Modified)
+
+This file was heavily updated (~80–90%) to implement a working demonstration agent.
+
+Key changes include:
+
+* agent speaking state tracking
+* STT transcript interception and filtering
+* smooth real-time behavior during speech
+
+This file is the easiest way to demo the feature in a real voice session.
+
+---
+
+### 2) `intterrupt_audio_backend.py` (Added)
+
+This file contains the reusable core implementation:
+
+* `InterruptionSettings`
+* `InterruptionHandler`
+* decision logic: `should_ignore_interrupt(text, is_speaking)`
+
+It supports:
+
+* backchannel words
+* backchannel phrases
+* explicit command words
+* debug explanations and structured decision reasons
+
+---
+
+### 3) `agent_activity.py` (Modified)
+
+This integrates the interruption filter into the agent runtime activity logic.
+
+Integration point calls:
 
 ```python
-["yeah", "ok", "hmm", "right", "uh-huh"]
+should_ignore = self._interrupt_filter.should_ignore_interrupt(
+    text=text,
+    is_speaking=is_speaking
+)
 ```
 
-These are treated as *non-interrupting* **only when the agent is actively speaking**.
+If `should_ignore=True`, the interruption event is dropped and the agent continues naturally.
 
 ---
 
-### 2) State-Based Filtering
+### 4) `interrupt_tests.py` (Added)
 
-The filter checks the agent state:
+A full isolation-level test suite validating correctness across multiple scenarios.
 
-* If `agent is speaking` → backchannels are ignored
-* If `agent is silent` → backchannels are treated as valid user input
+This includes:
 
-This ensures correct conversational flow.
-
----
-
-### 3) Semantic Interruption Handling (Mixed Sentences)
-
-If the user says something like:
-
-> `"Yeah okay but wait"`
-
-Even though it starts with backchannel words, it contains a real command (`wait`) → **interrupt immediately**.
-
-So mixed inputs are correctly classified as **active interruptions**.
+* pure backchannel while speaking
+* explicit commands while speaking
+* mixed backchannel + command
+* same input behaving differently when agent is silent vs speaking
+* edge cases like empty/whitespace/punctuation-only
 
 ---
 
-### 4) No VAD Kernel Modification
+## 🧪 Test Coverage (Isolation Level Validation)
 
-⚠️ The low-level VAD kernel is NOT modified.
-
-Instead, this is implemented as a **logic layer** in the agent event loop using STT transcript signals.
-
----
-
-## Hiccup / False Interruption Prevention (Key Production Fix)
-
-### Why hiccups happen
-
-VAD triggers faster than STT.
-
-So the sequence becomes:
-
-1. User says `"yeah"` while agent is speaking
-2. VAD fires instantly → agent pauses/stops
-3. STT arrives later → we realize it was only `"yeah"`
-4. Too late → agent already paused → **hiccup occurs**
-
-### Fix Strategy
-
-A **deferred interrupt guard** was added:
-
-* If VAD fires but STT transcript is not ready yet,
-  we wait for a **tiny real-time window** (example ~250ms).
-* If STT resolves to a backchannel → ignore interruption entirely.
-* If STT resolves to a real command → interrupt normally.
-
-This ensures:
-
-✅ No stutter
-✅ No pause
-✅ No resume glitch
-✅ Seamless speech continuity
-
----
-
-## Files Added / Modified
-
-### ✅ `intterrupt_audio_backend.py`
-
-Contains the interruption filter logic:
-
-* token normalization
-* backchannel ignore list
-* semantic interruption detection
-* punctuation-safe matching
-
-### ✅ `interrupt_tests.py`
-
-Contains test cases that validate all core requirements:
-
-* ignore backchannels while speaking
-* interrupt on real commands
-* respond to backchannels while silent
-* handle mixed input like `"yeah wait"`
-
-### ✅ `agent_activity.py`
-
-Minimal integration changes:
-
-* adds `InterruptionHandler`
-* uses the filter during interruption decision logic
-* includes deferred interrupt guard to prevent hiccups
-
----
-
-## How To Run Tests
-
-From the project directory:
+### Running tests
 
 ```bash
-python3 interrupt_tests.py
+python interrupt_tests.py
 ```
 
-Expected output:
+### What the tests validate
 
-* All tests should pass (`116/116`)
-
----
-
-## Behavior Matrix (Expected)
-
-| User Input           | Agent State | Expected Behavior                     |
-| -------------------- | ----------- | ------------------------------------- |
-| "Yeah / Ok / Hmm"    | Speaking    | IGNORE (agent continues seamlessly)   |
-| "Wait / Stop / No"   | Speaking    | INTERRUPT immediately                 |
-| "Yeah / Ok / Hmm"    | Silent      | RESPOND normally                      |
-| "Start / Hello"      | Silent      | RESPOND normally                      |
-| "Yeah wait a second" | Speaking    | INTERRUPT (semantic command detected) |
-
----
-## Summary
-
-This solution prevents unwanted interruptions from filler words **without modifying VAD**, by using:
-
-* state-aware filtering
-* semantic interruption detection
-* deferred interruption guard to avoid false-stop hiccups
-
-This ensures a smooth, real-time voice conversation experience.
+* backchannels do not interrupt while speaking
+* commands always interrupt
+* mixed phrases prioritize commands
+* silent-state input is not ignored
+* edge cases do not break the system
 
 ---
 
+## 🎬 Live Demo Validation (Real-Time Behavior)
+
+This was also validated in a real voice agent session (not only unit tests).
+
+### Demo Case 1: Backchannel During Explanation
+
+Agent speaking:
+User says: “yeah”, “ok”, “hmm”
+✅ Agent continues smoothly without stopping.
+
+### Demo Case 2: Explicit Interrupt
+
+Agent speaking:
+User says: “stop” / “wait”
+✅ Agent stops immediately.
+
+### Demo Case 3: Mixed Input
+
+Agent speaking:
+User says: “yeah but wait”
+✅ Agent stops (command wins).
+
+---
+
+## 🧠 Decision Logic Summary
+
+### Algorithm (simplified)
+
+```
+Input: (text, is_speaking)
+
+1) Normalize + tokenize transcript
+2) If empty/meaningless -> ignore safely
+3) If contains explicit command -> DO NOT ignore (interrupt)
+4) If pure backchannel AND agent is speaking -> ignore
+5) Otherwise -> do not ignore
+```
+
+---
+
+## 📌 References
+
+* LiveKit Agents Documentation
+* Backchannel communication concept (linguistics)
+* GPT+LLMs
+
+---
 

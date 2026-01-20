@@ -12,10 +12,10 @@ Tests cover:
 
 import sys
 import time
-import importlib.util
 from typing import List, Tuple
 sys.path.insert(0, '../livekit-agents')
 
+import importlib.util
 # Import the interruption handler
 # Load the file directly using the CORRECT spelling (single 't')
 spec = importlib.util.spec_from_file_location(
