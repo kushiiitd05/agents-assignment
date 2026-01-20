@@ -1169,14 +1169,63 @@ class AgentActivity(RecognitionHooks):
             name="AgentActivity.realtime_generation",
         )
         self._schedule_speech(handle, SpeechHandle.SPEECH_PRIORITY_NORMAL)
+#  added code starts here
+#  this is to prevent false interruption caused by VAD triggering before STT transcript is available
+    
+    async def _deferred_interrupt_guard(self) -> None:
+        """
+        Prevent false interruption caused by VAD triggering before STT transcript is available.
 
+        Wait a tiny window for STT transcript. If transcript is just backchannel ("yeah/ok/hmm"),
+        ignore and let agent continue without pausing/stopping.
+        """
+        GUARD_WINDOW_SEC = 0.25
+
+        deadline = time.monotonic() + GUARD_WINDOW_SEC
+
+        while time.monotonic() < deadline:
+            # If speech ended or already interrupted, exit
+            if not self._current_speech or self._current_speech.interrupted:
+                return
+
+            if not self._audio_recognition:
+                await asyncio.sleep(0.01)
+                continue
+
+            text = (self._audio_recognition.current_transcript or "").strip()
+
+            # still empty → wait a bit more
+            if not text:
+                await asyncio.sleep(0.01)
+                continue
+
+            # transcript available → decide using existing filter
+            is_speaking = self._current_speech is not None and not self._current_speech.interrupted
+
+            if self._interrupt_filter.should_ignore_interrupt(text=text, is_speaking=is_speaking):
+                # backchannel → ignore interruption completely
+                return
+
+            # meaningful transcript → real interruption
+            break
+
+        # After guard window: if transcript is still empty OR meaningful → interrupt now
+        if (
+            self._current_speech is not None
+            and not self._current_speech.interrupted
+            and self._current_speech.allow_interruptions
+        ):
+            if self._rt_session is not None:
+                self._rt_session.interrupt()
+            self._current_speech.interrupt()
+        
+    # modified to use the deferred interrupt guard
     def _interrupt_by_audio_activity(self) -> None:
         opt = self._session.options
         use_pause = opt.resume_false_interruption and opt.false_interruption_timeout is not None
 
         if isinstance(self.llm, llm.RealtimeModel) and self.llm.capabilities.turn_detection:
             # ignore if realtime model has turn detection enabled
-            
             return
 
         if (
@@ -1192,16 +1241,24 @@ class AgentActivity(RecognitionHooks):
 
         if self._rt_session is not None:
             self._rt_session.start_user_activity()
-        
+
+        # --- hiccup prevention logic (VAD triggers before STT transcript exists) ---
         if self._audio_recognition and self._current_speech:
-            text = self._audio_recognition.current_transcript
+            text = (self._audio_recognition.current_transcript or "").strip()
             is_speaking = not self._current_speech.interrupted
-        
-            if self._interrupt_filter.should_ignore_interrupt(
-                text=text,
-                is_speaking=is_speaking
-            ):
+
+            # transcript already available → decide immediately
+            if text:
+                if self._interrupt_filter.should_ignore_interrupt(text=text, is_speaking=is_speaking):
+                    return
+            else:
+                # transcript not ready yet → defer interruption briefly
+                if self._deferred_interrupt_task and not self._deferred_interrupt_task.done():
+                    return  # already waiting on guard
+
+                self._deferred_interrupt_task = asyncio.create_task(self._deferred_interrupt_guard())
                 return
+        # --- end hiccup prevention logic ---
 
         if (
             self._current_speech is not None
@@ -1223,6 +1280,7 @@ class AgentActivity(RecognitionHooks):
                     self._rt_session.interrupt()
 
                 self._current_speech.interrupt()
+
 
     # region recognition hooks
 
