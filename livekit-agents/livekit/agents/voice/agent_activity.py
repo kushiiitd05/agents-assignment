@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import asyncio
 import contextvars
+from intterrupt_audio_backend import InterruptionHandler, InterruptionSettings
+import re
 import heapq
 import json
 import time
@@ -120,6 +122,8 @@ class AgentActivity(RecognitionHooks):
 
         self._current_speech: SpeechHandle | None = None
         self._speech_q: list[tuple[int, float, SpeechHandle]] = []
+        # Initialize the interruption filter
+        self._interrupt_filter = InterruptionHandler()
 
         # for false interruption handling
         self._paused_speech: SpeechHandle | None = None
@@ -1172,6 +1176,7 @@ class AgentActivity(RecognitionHooks):
 
         if isinstance(self.llm, llm.RealtimeModel) and self.llm.capabilities.turn_detection:
             # ignore if realtime model has turn detection enabled
+            
             return
 
         if (
@@ -1187,6 +1192,16 @@ class AgentActivity(RecognitionHooks):
 
         if self._rt_session is not None:
             self._rt_session.start_user_activity()
+        
+        if self._audio_recognition and self._current_speech:
+            text = self._audio_recognition.current_transcript
+            is_speaking = not self._current_speech.interrupted
+        
+            if self._interrupt_filter.should_ignore_interrupt(
+                text=text,
+                is_speaking=is_speaking
+            ):
+                return
 
         if (
             self._current_speech is not None
